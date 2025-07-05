@@ -1,0 +1,1078 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © chewyee
+
+//@version=6
+strategy("B-Xtrender Bot - THT @chewy", overlay=true, max_labels_count = 500, process_orders_on_close=true, calc_on_every_tick=true, initial_capital=30000, default_qty_type=strategy.percent_of_equity, default_qty_value=100)
+
+use_tht_bot_settings = input.bool(true, "Use settings that match bots used in THT", group="Presets", tooltip="This will override any settings configured.\n\nWhen enabled on 1h timeframe, matches the 1hr-bx-bot.\n\nWhen enabled on daily timeframe, matches the bx-hybrid-bot\n\nWhen used on weekly, uses entry on Higher Low and exit on Lower High. This does not match the main fund.")
+use_bx_filters_with_tht_settings = input.bool(false, "Use weekly watchlist BX filters with THT settings", group="Presets", tooltip="The TrendSpider bots don't use BX filters but you can enable the same BX filters used for the weekly watchlist")
+
+strategy = input.string("B-Xtrender", "Strategy", options=["B-Xtrender", "Weekly Watchlist", "Hourly Swing/Quant Bot"], group="Strategies", tooltip="B-Xtrender uses the BX values for it's entries and exits.\n\nWeekly Watchlist will only enter trades at the beginning of the month if monthly and weekly match the filter. Then will exit when weekly filter does not match anymore.\n\nHourly Swing/Quant Bot enters if it's above two SMAs. It has a static take profit and stop loss percentage.\n\nThe strategies only adjusts the way trades are entered and exited. The filters will still need to be set appropiately either by using the preset or setting yourself.")
+
+// Trend options
+var g_trade_conditions = "Trade Settings"
+barstate_entry = input.string("Bar Confirmed", "Trade Timing", options=["Bar Confirmed", "New Bar"], group=g_trade_conditions, tooltip="Determines if trade should enter or exit at the close of the bar or the open of the next bar. This changes results when gaps happen")
+trade_before_close_setting = input.bool(true, "Trade before close", group=g_trade_conditions, inline="TBC")
+include_no_data_setting = input.bool(true, "Enter trades when HTF filter has no data", group=g_trade_conditions, tooltip="If this is selected and filtering by a higher timeframe, then it will trade even if there isn't enough data")
+trade_before_close_minute = input.int(58, "", minval=31, maxval=59, step=1, group=g_trade_conditions, inline="TBC", tooltip = "If trading at bar close, this will execute the trade at the minute of the last bar of the day. This currently only supports hourly timeframe")
+enable_realtime_entries = input.bool(false, "Enable early entries !! BEWARE REPAINTING !!", group=g_trade_conditions, inline="RE")
+realtime_entries_setting = input.string("Both", "", options=["Weekly", "Monthly", "Both"], group=g_trade_conditions, inline="RE", tooltip="If enabled, this will use both the current and last HTF candle data.\n\nIf current is a match, but last candle is not, then it will enter. Hopefully early entry.\n\nIf current is not a match, but last candle is, then it will enter. Hopefuly not confirmed downside")
+
+var g_bx_strategy = "B-Xtrender Strategy"
+entry_setting = input.string("Higher High", "Entry Conditions", options=["Higher High", "Higher Low"], group=g_bx_strategy, tooltip="Enter the trade when the BX is a specific value. If Higher Low is selected, this will also enter on Higher High")
+exit_setting = input.string("Lower Low", "Exit Condition", options=["Lower Low", "Higher Low", "Lower High"], group=g_bx_strategy, tooltip="Exit the trade when the BX is a specific value. If Lower High is selected, this will also exit on Lower Low")
+
+var g_weekly_watchlist = "Weekly Watchlist Strategy"
+weekly_watchlist_exit_setting = input.string("Lower Low", "Exit Condition", options=["Lower Low", "Higher Low", "Lower High"], group=g_weekly_watchlist, tooltip="Exit the trade when the BX is a specific value. If Lower High is selected, this will also exit on Lower Low")
+
+var g_hourly_swing = "Hourly Swing/Quant Bot Strategy"
+take_profit_percent = input.float(2.0, title="Take Profit % | Min bars", step=0.1, group=g_hourly_swing, inline="tp")
+tp_min_bars_to_exit = input.int(2, title="", minval=1, group=g_hourly_swing, inline="tp", tooltip="Take profit will happen based on Trade Timing. This will cause profit to be higher than the take profit percentage.")
+stop_loss_percent = input.float(4.0, title="Stop Loss %  | Min bars", step=0.1, group=g_hourly_swing, inline="sl")
+sl_min_bars_to_exit = input.int(2, title="", minval=1, group=g_hourly_swing, inline="sl", tooltip="Stop loss will happen based on Trade Timing. This will cause loss to be higher than the stop loss percentage.")
+enable_rsi_condition = input.bool(true, title="RSI Increasing", group=g_hourly_swing)
+candle_delay = input.int(0, title="Candle Delay", group=g_hourly_swing, tooltip="Wait this many candles after the criteria is met before entry")
+
+var g_trend_filter_1 = "BX Filters - Daily | Weekly | Monthly"
+enable_trend_filter_1 = input.bool(true, "Filter 1", group=g_trend_filter_1, inline="1", tooltip="These are higher timeframe filters using B-Xtrender. In the order of Daily/Weekly/Monthly")
+daily_bxtrender_trend_settings_1 = input.string("All", title="", options = ["All", "Only Positive", "Only Negative", "HH", "LH", "HH+HL", "Positive+HL", "LL", "HL", "LL+HL", "Negative+LH", "LH+LL", "LH+HL"], group=g_trend_filter_1, inline="1")
+weekly_bxtrender_trend_settings_1 = input.string("All", title="", options = ["All", "Only Positive", "Only Negative", "HH", "LH", "HH+HL", "Positive+HL", "LL", "HL", "LL+HL", "Negative+LH", "LH+LL", "LH+HL"], group=g_trend_filter_1, inline="1")
+monthly_bxtrender_trend_settings_1 = input.string("All", title="", options = ["All", "Only Positive", "Only Negative", "HH", "LH", "HH+HL", "Positive+HL", "LL", "HL", "LL+HL", "Negative+LH", "LH+LL", "LH+HL"], group=g_trend_filter_1, inline="1")
+
+enable_trend_filter_2 = input.bool(false, "Filter 2", group=g_trend_filter_1, inline="2", tooltip="These are higher timeframe filters using B-Xtrender. In the order of Daily/Weekly/Monthly")
+daily_bxtrender_trend_settings_2 = input.string("All", title="", options = ["All", "Only Positive", "Only Negative", "HH", "LH", "HH+HL", "Positive+HL", "LL", "HL", "LL+HL", "Negative+LH", "LH+LL", "LH+HL"], group=g_trend_filter_1, inline="2")
+weekly_bxtrender_trend_settings_2 = input.string("All", title="", options = ["All", "Only Positive", "Only Negative", "HH", "LH", "HH+HL", "Positive+HL", "LL", "HL", "LL+HL", "Negative+LH", "LH+LL", "LH+HL"], group=g_trend_filter_1, inline="2")
+monthly_bxtrender_trend_settings_2 = input.string("All", title="", options = ["All", "Only Positive", "Only Negative", "HH", "LH", "HH+HL", "Positive+HL", "LL", "HL", "LL+HL", "Negative+LH", "LH+LL", "LH+HL"], group=g_trend_filter_1, inline="2")
+
+enable_trend_filter_3 = input.bool(false, "Filter 3", group=g_trend_filter_1, inline="3", tooltip="These are higher timeframe filters using B-Xtrender. In the order of Daily/Weekly/Monthly")
+daily_bxtrender_trend_settings_3 = input.string("All", title="", options = ["All", "Only Positive", "Only Negative", "HH", "LH", "HH+HL", "Positive+HL", "LL", "HL", "LL+HL", "Negative+LH", "LH+LL", "LH+HL"], group=g_trend_filter_1, inline="3")
+weekly_bxtrender_trend_settings_3 = input.string("All", title="", options = ["All", "Only Positive", "Only Negative", "HH", "LH", "HH+HL", "Positive+HL", "LL", "HL", "LL+HL", "Negative+LH", "LH+LL", "LH+HL"], group=g_trend_filter_1, inline="3")
+monthly_bxtrender_trend_settings_3 = input.string("All", title="", options = ["All", "Only Positive", "Only Negative", "HH", "LH", "HH+HL", "Positive+HL", "LL", "HL", "LL+HL", "Negative+LH", "LH+LL", "LH+HL"], group=g_trend_filter_1, inline="3")
+
+enable_trend_filter_4 = input.bool(false, "Filter 4", group=g_trend_filter_1, inline="4", tooltip="These are higher timeframe filters using B-Xtrender. In the order of Daily/Weekly/Monthly")
+daily_bxtrender_trend_settings_4 = input.string("All", title="", options = ["All", "Only Positive", "Only Negative", "HH", "LH", "HH+HL", "Positive+HL", "LL", "HL", "LL+HL", "Negative+LH", "LH+LL", "LH+HL"], group=g_trend_filter_1, inline="4")
+weekly_bxtrender_trend_settings_4 = input.string("All", title="", options = ["All", "Only Positive", "Only Negative", "HH", "LH", "HH+HL", "Positive+HL", "LL", "HL", "LL+HL", "Negative+LH", "LH+LL", "LH+HL"], group=g_trend_filter_1, inline="4")
+monthly_bxtrender_trend_settings_4 = input.string("All", title="", options = ["All", "Only Positive", "Only Negative", "HH", "LH", "HH+HL", "Positive+HL", "LL", "HL", "LL+HL", "Negative+LH", "LH+LL", "LH+HL"], group=g_trend_filter_1, inline="4")
+
+var g_rsi_filter = "RSI Filters"
+enable_weekly_rsi_filter = input.bool(true, "Enable Weekly RSI Above MA", group=g_rsi_filter)
+enable_monthly_rsi_filter = input.bool(false, "Enable Monthly RSI Above MA", group=g_rsi_filter)
+
+var g_mb_filter = "Market Bias Filters - Daily | Weekly | Monthly"
+enable_mb_filter = input.bool(false, "Enable", group=g_mb_filter, inline="mb")
+daily_mb_settings = input.string("All", "", options=["All", "Green", "DG", "LG", "Green+LR"], group=g_mb_filter, inline="mb")
+weekly_mb_settings = input.string("All", "", options=["All", "Green", "DG", "LG", "Green+LR"], group=g_mb_filter, inline="mb")
+monthly_mb_settings = input.string("All", "", options=["All", "Green", "DG", "LG", "Green+LR"], group=g_mb_filter, inline="mb", tooltip="DG = Dark Green\nLG = LightGreen\nLR = Light Red")
+
+var g_repainting = "Higher Timeframe Data"
+repaint_daily = input.bool(false, "Use current Daily !! BEWARE OF REPAINTING !!", group=g_repainting, tooltip="This will wait for the Daily candle to close. If disabled, this will cause repainting which will affect backtesting results.\n\nBe aware of when using this live that trades may disappear if the HTF filter doesn't match anymore. Look in the alert section for getting exit alerts without HTF filters.")
+repaint_weekly = input.bool(false, "Use current Weekly !! BEWARE OF REPAINTING !!", group=g_repainting, tooltip="This will wait for the Weekly candle to close. If disabled, this will cause repainting which will affect backtesting results.\n\nBe aware of when using this live that trades may disappear if the HTF filter doesn't match anymore. Look in the alert section for getting exit alerts without HTF filters.")
+repaint_monthly = input.bool(false, "Use current Monthly !! BEWARE OF REPAINTING !!", group=g_repainting, tooltip="This will wait for the Monthly candle to close. If disabled, this will cause repainting which will affect backtesting results.\n\nBe aware of when using this live that trades may disappear if the HTF filter doesn't match anymore. Look in the alert section for getting exit alerts without HTF filters.")
+
+// B-Xtrender inputs
+var g_bx = "Settings"
+short_l1 = input.int(5, title="B", group=g_bx, inline="bx")
+short_l2 = input.int(20, title="", group=g_bx, inline="bx")
+short_l3 = input.int(5, title="", group=g_bx, inline="bx", tooltip="B-Xtrender - L1 | L2 | L3")
+
+rsi_length = input.int(14, title="R", group=g_bx, inline="rsi_settings")
+rsi_ma_length = input.int(14, title="", group=g_bx, inline="rsi_settings", tooltip="RSI - Length | MA Length")
+
+mb_len = input.int(20, title="M", group=g_bx, inline="mb_settings")
+mb_smoothing = input.int(7, title="", group=g_bx, inline="mb_settings")
+mb_osc_len = input.int(7, title="", group=g_bx, inline="mb_settings", tooltip="Market Bias - Period | Smoothing | Oscillator Period")
+
+hourly_swing_sma_1_setting = input.int(11, title="S", group=g_bx, inline="sma")
+hourly_swing_sma_2_setting = input.int(100, title="", group=g_bx, inline="sma", tooltip="Hourly Swi SMA - 1 | 2")
+
+// Backtest Settings
+var g_backtest_settings = "Backtest Settings"
+use_backtest_date = input.bool(false, "Use Backtest Start Date", group=g_backtest_settings, inline="backtest_start")
+backtest_time = input.time(timestamp("01 Jan 2020 19:00 +0500"), "", group=g_backtest_settings, inline="backtest_start")
+use_backtest_stop_date = input.bool(false, "Use Backtest Stop Date", group=g_backtest_settings, inline="backtest_stop")
+backtest_stop_time = input.time(timestamp("01 Jan 2025 19:00 +0500"), "", group=g_backtest_settings, inline="backtest_stop")
+initial_account_size = input.float(30000, "Initial Account Size ($)", minval=100.0, step=100.0, group=g_backtest_settings)
+base_position_size = input.float(100, "Base Position Size (%)", minval=0.1, maxval=100.0, step=1, group=g_backtest_settings)
+enable_strategy = input.bool(false, "Enable Strategy Tester !! DOES NOT WORK WITH NEW BAR TIMING !!", group=g_backtest_settings, tooltip="This enables trades using TradingView's Strategy Tester")
+
+// Alert Settings
+var g_alert_settings = "Alert Settings"
+alert_strategy_name = input.string("B-Xtrender Bot", "Strategy Name", group=g_alert_settings, tooltip="This name will be included in the alert json field: strategy_name. This can be used to identify strategies when running multiple.")
+alert_strategy_secret = input.string("", "Strategy Secret", group=g_alert_settings, tooltip="This secret will be included in the alert json field: strategy_secret. This can be used as an additional layer of security for what processes the alert.")
+send_htf_mismatch_alerts = input.bool(false, "Send exit alerts when higher timeframe filters are not met", group=g_alert_settings, tooltip="Send exit alerts when higher timeframe filters are not met. This is only be helpful if repainting is enabled to avoid exits not happening if htf filter flips back after entry.")
+
+// Table Settings
+var g_table_settings = "Display Settings"
+label_text_size = input.string("small", "Label Size", options=["tiny", "small", "normal", "large"], group=g_table_settings)
+show_stats_table = input.bool(true, "Show Stats Table", group=g_table_settings)
+show_bxtrender_rows = input.bool(false, "Show B-Xtrender Values", group=g_table_settings)
+show_bx_filter_stats = input.bool(false, "Show BX Filter Stats", group=g_table_settings)
+stats_table_position = input.string("top_right", "Stats Table Position", options=["top_right", "top_left"], group=g_table_settings)
+table_text_size = input.string("small", "Table Text Size", options=["tiny", "small", "normal", "large"], group=g_table_settings)
+table_bg_color = input.color(color.rgb(0, 0, 0), "Table Background Color", group=g_table_settings)
+table_border_color = input.color(color.gray, "Table Border Color", group=g_table_settings)
+table_header_color = input.color(color.new(color.blue, 70), "Table Header Color", group=g_table_settings)
+
+var g_experimental_settings = "Experimental Settings !! USE WITH CAUTION !!"
+enable_entry_hl_rsi_above_ma = input.bool(false, "B-Xtrender - Enable Entry Higher Low and RSI above MA", group=g_experimental_settings, tooltip="This makes the strategy more complex and should only be used if you are trying to optimize.")
+enable_entry_hl_down_candle = input.bool(false, "B-Xtrender - Enable Entry Higher Low and Down Candle", group=g_experimental_settings, tooltip="This makes the strategy more complex and should only be used if you are trying to optimize.")
+enable_bx_stop_loss = input.bool(false, "B-Xtrender - Enable Stop Loss %", group=g_experimental_settings, inline="bx_sl", tooltip="Be careful with backtesting with this option. This can add lookahead bias if you aren't separating the training and test data.")
+bx_stop_loss = input.float(3, title="", step=0.1, group=g_experimental_settings, inline="bx_sl", tooltip="This makes the strategy more complex and should only be used if you are trying to optimize.")
+
+var is_15m = timeframe.in_seconds(timeframe.period) == timeframe.in_seconds('15')
+var is_hourly = timeframe.in_seconds(timeframe.period) == timeframe.in_seconds('60')
+var is_daily = timeframe.in_seconds(timeframe.period) == timeframe.in_seconds('D')
+var is_weekly = timeframe.in_seconds(timeframe.period) == timeframe.in_seconds('1W')
+var is_monthly = timeframe.in_seconds(timeframe.period) == timeframe.in_seconds('1M')
+
+if use_tht_bot_settings
+    table_header_color := color.new(#00bcd4, 70)
+
+    short_l1 := 5
+    short_l2 := 20
+    short_l3 := 5
+
+    rsi_length := 14
+    rsi_ma_length := 14
+
+    enable_trend_filter_1 := true
+    enable_trend_filter_2 := false
+    enable_trend_filter_3 := false
+    enable_trend_filter_4 := false
+    daily_bxtrender_trend_settings_1 := use_bx_filters_with_tht_settings ? "All" : "All"
+    weekly_bxtrender_trend_settings_1 := use_bx_filters_with_tht_settings ? "Only Positive" : "All"
+    monthly_bxtrender_trend_settings_1 := use_bx_filters_with_tht_settings ? "Positive+HL" : "All"
+
+    if strategy == "B-Xtrender"
+        barstate_entry :=  timeframe.isdaily ? "New Bar" : "Bar Confirmed"
+        entry_setting := timeframe.isdaily ? "Higher Low" : "Higher High"
+        exit_setting := timeframe.isweekly ? "Lower High" : "Lower Low"
+        enable_entry_hl_down_candle := false
+        enable_entry_hl_rsi_above_ma := false
+        enable_bx_stop_loss := false
+
+        enable_weekly_rsi_filter := timeframe.isweekly ? false : true
+        enable_monthly_rsi_filter := false
+    else if strategy == "Hourly Swing/Quant Bot"
+        barstate_entry := "Bar Confirmed"
+        if is_15m
+            hourly_swing_sma_1_setting := 11
+            hourly_swing_sma_2_setting := 50
+            take_profit_percent := 0.5
+            stop_loss_percent := 2
+            tp_min_bars_to_exit := 1
+            sl_min_bars_to_exit := 2
+            candle_delay := 2
+        else
+            hourly_swing_sma_1_setting := 11
+            hourly_swing_sma_2_setting := 100
+            take_profit_percent := 2
+            stop_loss_percent := 4
+            tp_min_bars_to_exit := 2
+            sl_min_bars_to_exit := 2
+            candle_delay := 0
+
+        enable_weekly_rsi_filter := false
+        enable_monthly_rsi_filter := false
+    else if strategy == "Weekly Watchlist"
+        barstate_entry := "New Bar"
+        weekly_watchlist_exit_setting := "Lower Low"
+        daily_bxtrender_trend_settings_1 := "All"
+        weekly_bxtrender_trend_settings_1 := "Only Positive"
+        monthly_bxtrender_trend_settings_1 := "Positive+HL"
+
+        enable_weekly_rsi_filter := false
+        enable_monthly_rsi_filter := false
+
+    include_no_data_setting := true
+    enable_realtime_entries := false
+
+    repaint_daily := false
+    repaint_weekly := false
+    repaint_monthly := false
+
+    enable_mb_filter := false
+
+enum trend
+    higher_high = "HH"
+    lower_high = "LH"
+    lower_low = "LL"
+    higher_low = "HL"
+
+// ======= TRADE STATISTICS TRACKING =======
+var int total_trades = 0
+var int winning_trades = 0
+var int losing_trades = 0
+var float cumulative_profit_loss = 0.0
+var float max_profit = 0.0
+var float max_loss = 0.0
+var float avg_win = 0.0
+var float avg_loss = 0.0
+var float sum_wins = 0.0
+var float sum_losses = 0.0
+var float sum_profit = 0.0
+var float sum_loss = 0.0
+var float max_drawdown = 0.0
+var float peak_value = 0.0
+var float buy_and_hold_entry_price = na
+
+// Trend filter statistics
+var int trend_filter_1_trades = 0
+var int trend_filter_2_trades = 0
+var int trend_filter_3_trades = 0
+var float trend_filter_1_profit = 0.0
+var float trend_filter_2_profit = 0.0
+var float trend_filter_3_profit = 0.0
+var int trend_filter_1_wins = 0
+var int trend_filter_2_wins = 0
+var int trend_filter_3_wins = 0
+var float trend_filter_1_win_sum = 0.0
+var float trend_filter_1_loss_sum = 0.0
+var float trend_filter_2_win_sum = 0.0
+var float trend_filter_2_loss_sum = 0.0
+var float trend_filter_3_win_sum = 0.0
+var float trend_filter_3_loss_sum = 0.0
+var int trend_filter_1_losses = 0
+var int trend_filter_2_losses = 0
+var int trend_filter_3_losses = 0
+var int trend_filter_4_trades = 0
+var int trend_filter_4_wins = 0
+var int trend_filter_4_losses = 0
+var float trend_filter_4_profit = 0.0
+var float trend_filter_4_win_sum = 0.0
+var float trend_filter_4_loss_sum = 0.0
+
+// Trade state variables
+var string exit_reason = na
+var float exit_percentage = na
+var bool in_trade = false
+var float entry_price = na
+var int bars_in_trade = 0
+var float position_size = 0
+var float take_profit_level = na
+var float stop_loss_level = na
+
+// Separate trade tracking for HTF repainting issues
+var bool independent_trade_tracking = false
+var float independent_entry_price = na
+var int independent_bars_in_trade = 0
+
+// Account tracking variables
+var float current_account_size = initial_account_size
+var float peak_account_size = initial_account_size
+var float max_account_drawdown_pct = 0.0
+
+bxtrender(index) =>
+    shortTermXtrender = ta.rsi(ta.ema(close[index], short_l1) - ta.ema(close[index], short_l2), short_l3) - 50
+    bx_trend = na(shortTermXtrender) ? na : shortTermXtrender > 0 ? (shortTermXtrender > shortTermXtrender[1] ? trend.higher_high : trend.lower_high) : (shortTermXtrender < shortTermXtrender[1] ? trend.lower_low : trend.higher_low)
+    [shortTermXtrender, shortTermXtrender[1], bx_trend]
+
+rsi(index) =>
+    rsi = ta.rsi(close[index], rsi_length)
+    rsi_ma = ta.sma(rsi, rsi_ma_length)
+    [rsi, rsi_ma]
+
+marketbias(index) =>
+    // Smoothen the OHLC values 
+    o = ta.ema(open[index], mb_len)
+    c = ta.ema(close[index], mb_len)
+    h = ta.ema(high[index], mb_len)
+    l = ta.ema(low[index], mb_len)
+
+    // Calculate the Heikin Ashi OHLC values from it
+    haclose = (o + h + l + c) / 4
+    xhaopen = (o + c) / 2
+    haopen = na(xhaopen[1]) ? (o + c) / 2 : (xhaopen[1] + haclose[1]) / 2
+    hahigh = math.max(h, math.max(haopen, haclose))
+    halow = math.min(l, math.min(haopen, haclose))
+
+    // Smoothen the Heiken Ashi Candles
+    o2 = ta.ema(haopen, mb_smoothing)
+    c2 = ta.ema(haclose, mb_smoothing)
+    h2 = ta.ema(hahigh, mb_smoothing)
+    l2 = ta.ema(halow, mb_smoothing)
+
+    ha_avg = (h2 + l2) / 2
+
+    osc_bias = 100 * (c2 - o2)
+    osc_smooth = ta.ema(osc_bias, mb_osc_len)
+
+    is_expansion = osc_bias > 0 ? (osc_bias >= osc_smooth) : (osc_bias <= osc_smooth)
+
+    [osc_bias, is_expansion]
+
+var bxtrender_strategy_enabled = strategy == "B-Xtrender" and timeframe.in_seconds(timeframe.period) >= timeframe.in_seconds('60')
+var hourly_swing_strategy_enabled = strategy == "Hourly Swing/Quant Bot" and (is_15m or is_hourly)
+var weekly_watchlist_strategy_enabled = strategy == "Weekly Watchlist" and is_daily
+
+enable_realtime_weekly_entries_condition = enable_realtime_entries and (realtime_entries_setting == "Weekly" or realtime_entries_setting == "Both") and not is_weekly
+enable_realtime_monthly_entries_condition = enable_realtime_entries and (realtime_entries_setting == "Monthly" or realtime_entries_setting == "Both") and not is_monthly
+
+[hourly_bxtrender, hourly_bxtrender_prev, hourly_bxtrender_trend] = bxtrender(0)
+
+float daily_bxtrender = na
+float daily_bxtrender_prev = na
+trend daily_bxtrender_trend = na
+float weekly_bxtrender = na
+float weekly_bxtrender_prev = na
+trend weekly_bxtrender_trend = na
+float monthly_bxtrender = na
+float monthly_bxtrender_prev = na
+trend monthly_bxtrender_trend = na
+
+float realtime_weekly_bxtrender = na
+float realtime_weekly_bxtrender_prev = na
+trend realtime_weekly_bxtrender_trend = na
+
+float realtime_monthly_bxtrender = na
+float realtime_monthly_bxtrender_prev = na
+trend realtime_monthly_bxtrender_trend = na
+
+if is_daily
+    daily_bxtrender := hourly_bxtrender
+    daily_bxtrender_prev := hourly_bxtrender_prev
+    daily_bxtrender_trend := hourly_bxtrender_trend
+else
+    [temp_daily_bxtrender, temp_daily_bxtrender_prev, temp_daily_bxtrender_trend] = request.security(syminfo.tickerid, 'D', bxtrender(repaint_daily ? 0 : 1), lookahead = barmerge.lookahead_on)
+    daily_bxtrender := temp_daily_bxtrender
+    daily_bxtrender_prev := temp_daily_bxtrender_prev
+    daily_bxtrender_trend := temp_daily_bxtrender_trend
+
+if is_weekly
+    weekly_bxtrender := hourly_bxtrender
+    weekly_bxtrender_prev := hourly_bxtrender_prev
+    weekly_bxtrender_trend := hourly_bxtrender_trend
+else
+    [temp_weekly_bxtrender, temp_weekly_bxtrender_prev, temp_weekly_bxtrender_trend] = request.security(syminfo.tickerid, '1W', bxtrender(repaint_weekly ? 0 : 1), lookahead = barmerge.lookahead_on)
+    weekly_bxtrender := temp_weekly_bxtrender
+    weekly_bxtrender_prev := temp_weekly_bxtrender_prev
+    weekly_bxtrender_trend := temp_weekly_bxtrender_trend
+
+    if enable_realtime_weekly_entries_condition
+        [temp_realtime_weekly_bxtrender, temp_realtime_weekly_bxtrender_prev, temp_realtime_weekly_bxtrender_trend] = request.security(syminfo.tickerid, '1W', bxtrender(0), lookahead = barmerge.lookahead_on)
+        realtime_weekly_bxtrender := temp_realtime_weekly_bxtrender
+        realtime_weekly_bxtrender_prev := temp_realtime_weekly_bxtrender_prev
+        realtime_weekly_bxtrender_trend := temp_realtime_weekly_bxtrender_trend
+
+if is_monthly
+    monthly_bxtrender := hourly_bxtrender
+    monthly_bxtrender_prev := hourly_bxtrender_prev
+    monthly_bxtrender_trend := hourly_bxtrender_trend
+else
+    [temp_monthly_bxtrender, temp_monthly_bxtrender_prev, temp_monthly_bxtrender_trend] = request.security(syminfo.tickerid, '1M', bxtrender(repaint_monthly or strategy == "Weekly Watchlist" ? 0 : 1), lookahead = strategy == "Weekly Watchlist" ? barmerge.lookahead_off : barmerge.lookahead_on)
+    monthly_bxtrender := temp_monthly_bxtrender
+    monthly_bxtrender_prev := temp_monthly_bxtrender_prev
+    monthly_bxtrender_trend := temp_monthly_bxtrender_trend
+
+    if enable_realtime_monthly_entries_condition
+        [temp_realtime_monthly_bxtrender, temp_realtime_monthly_bxtrender_prev, temp_realtime_monthly_bxtrender_trend] = request.security(syminfo.tickerid, '1M', bxtrender(0), lookahead = barmerge.lookahead_on)
+        realtime_monthly_bxtrender := temp_realtime_monthly_bxtrender
+        realtime_monthly_bxtrender_prev := temp_realtime_monthly_bxtrender_prev
+        realtime_monthly_bxtrender_trend := temp_realtime_monthly_bxtrender_trend
+
+[current_rsi, current_rsi_ma] = rsi(0)
+
+float weekly_rsi = na
+float weekly_rsi_ma = na
+float monthly_rsi = na
+float monthly_rsi_ma = na
+
+float realtime_weekly_rsi = na
+float realtime_weekly_rsi_ma = na
+float realtime_monthly_rsi = na
+float realtime_monthly_rsi_ma = na
+
+if is_weekly
+    weekly_rsi := current_rsi
+    weekly_rsi_ma := current_rsi_ma
+else
+    [temp_weekly_rsi, temp_weekly_rsi_ma] = request.security(syminfo.tickerid, '1W', rsi(repaint_weekly ? 0 : 1), lookahead = barmerge.lookahead_on)
+    weekly_rsi := temp_weekly_rsi
+    weekly_rsi_ma := temp_weekly_rsi_ma
+    if enable_realtime_weekly_entries_condition
+        [temp_realtime_weekly_rsi, temp_realtime_weekly_rsi_ma] = request.security(syminfo.tickerid, '1W', rsi(0), lookahead = barmerge.lookahead_on)
+        realtime_weekly_rsi := temp_realtime_weekly_rsi
+        realtime_weekly_rsi_ma := temp_realtime_weekly_rsi_ma
+
+if is_monthly
+    monthly_rsi := current_rsi
+    monthly_rsi_ma := current_rsi_ma
+else
+    [temp_monthly_rsi, temp_monthly_rsi_ma] = request.security(syminfo.tickerid, '1M', rsi(repaint_monthly ? 0 : 1), lookahead = barmerge.lookahead_on)
+    monthly_rsi := temp_monthly_rsi
+    monthly_rsi_ma := temp_monthly_rsi_ma
+
+    if enable_realtime_monthly_entries_condition
+        [temp_realtime_monthly_rsi, temp_realtime_monthly_rsi_ma] = request.security(syminfo.tickerid, '1M', rsi(0), lookahead = barmerge.lookahead_on)
+        realtime_monthly_rsi := temp_realtime_monthly_rsi
+        realtime_monthly_rsi_ma := temp_realtime_monthly_rsi_ma
+
+float daily_mb_bias = na
+bool daily_mb_expansion = false
+float weekly_mb_bias = na
+bool weekly_mb_expansion = false
+float monthly_mb_bias = na
+bool monthly_mb_expansion = false
+
+if enable_mb_filter
+    if is_daily
+        [current_mb_bias, current_mb_expansion] = marketbias(0)
+        daily_mb_bias := current_mb_bias
+        daily_mb_expansion := current_mb_expansion
+    else
+        [temp_mb_bias, temp_mb_expansion] = request.security(syminfo.tickerid, 'D', marketbias(repaint_daily ? 0 : 1), lookahead = barmerge.lookahead_on)
+        daily_mb_bias := temp_mb_bias
+        daily_mb_expansion := temp_mb_expansion
+
+    if is_weekly
+        [current_mb_bias, current_mb_expansion] = marketbias(0)
+        weekly_mb_bias := current_mb_bias
+        weekly_mb_expansion := current_mb_expansion
+    else
+        [temp_mb_bias, temp_mb_expansion] = request.security(syminfo.tickerid, '1W', marketbias(repaint_weekly ? 0 : 1), lookahead = barmerge.lookahead_on)
+        weekly_mb_bias := temp_mb_bias
+        weekly_mb_expansion := temp_mb_expansion
+
+    if is_monthly
+        [current_mb_bias, current_mb_expansion] = marketbias(0)
+        monthly_mb_bias := current_mb_bias
+        monthly_mb_expansion := current_mb_expansion
+    else
+        [temp_mb_bias, temp_mb_expansion] = request.security(syminfo.tickerid, '1M', marketbias(repaint_weekly ? 0 : 1), lookahead = barmerge.lookahead_on)
+        monthly_mb_bias := temp_mb_bias
+        monthly_mb_expansion := temp_mb_expansion
+
+float hourly_swing_sma_1 = na
+float hourly_swing_sma_2 = na
+
+if hourly_swing_strategy_enabled
+    hourly_swing_sma_1 := ta.sma(close, hourly_swing_sma_1_setting)
+    hourly_swing_sma_2 := ta.sma(close, hourly_swing_sma_2_setting)
+
+plot(hourly_swing_strategy_enabled ? hourly_swing_sma_1 : na, color=color.yellow)
+plot(hourly_swing_strategy_enabled ? hourly_swing_sma_2 : na, color=color.orange)
+
+if weekly_watchlist_strategy_enabled and month != month[1]
+    line.new(bar_index, low - ta.tr, bar_index, high + ta.tr, xloc.bar_index, extend.both, color.gray, line.style_dotted, 1)
+
+check_trend(trend_settings, bx, trend_value, include_no_data) =>
+    (include_no_data and na(bx)) or (not na(bx) and (trend_settings == "All" or
+     (trend_settings == "Only Positive" and bx > 0) or
+     (trend_settings == "Only Negative" and bx <= 0) or
+     (trend_settings == "HH" and trend_value == trend.higher_high) or
+     (trend_settings == "HL" and trend_value == trend.higher_low) or
+     (trend_settings == "HH+HL" and (trend_value == trend.higher_high or trend_value == trend.higher_low)) or
+     (trend_settings == "Positive+HL" and (bx > 0 or trend_value == trend.higher_low)) or
+     (trend_settings == "LL" and trend_value == trend.lower_low) or
+     (trend_settings == "LH" and trend_value == trend.lower_high) or
+     (trend_settings == "LL+HL" and (trend_value == trend.lower_low or trend_value == trend.higher_low)) or
+     (trend_settings == "Negative+LH" and (bx <= 0 or trend_value == trend.lower_high)) or
+     (trend_settings == "LH+LL" and (trend_value == trend.lower_high or trend_value == trend.lower_low)) or
+     (trend_settings == "LH+HL" and (trend_value == trend.lower_high or trend_value == trend.higher_low))))
+
+check_mb(mb_settings, mb_bias, mb_expansion) =>
+    mb_settings == "All" or
+     (mb_settings == "Green" and mb_bias > 0) or
+     (mb_settings == "DG" and mb_bias > 0 and mb_expansion) or
+     (mb_settings == "LG" and mb_bias > 0 and not mb_expansion) or
+     (mb_settings == "Green+LR" and (mb_bias > 0 or not mb_expansion))
+
+// Entry and exit conditions
+is_post_backtest_trade = (not use_backtest_date or time > backtest_time) and (not use_backtest_stop_date or time < backtest_stop_time)
+
+// Check trend conditions
+bool htf_bx_condition_1 = enable_trend_filter_1 and check_trend(daily_bxtrender_trend_settings_1, daily_bxtrender, daily_bxtrender_trend, false) and (check_trend(weekly_bxtrender_trend_settings_1, weekly_bxtrender, weekly_bxtrender_trend, false) or (enable_realtime_weekly_entries_condition and check_trend(weekly_bxtrender_trend_settings_1, realtime_weekly_bxtrender, realtime_weekly_bxtrender_trend, false))) and (check_trend(monthly_bxtrender_trend_settings_1, monthly_bxtrender, monthly_bxtrender_trend, include_no_data_setting) or (enable_realtime_monthly_entries_condition and check_trend(monthly_bxtrender_trend_settings_1, realtime_monthly_bxtrender, realtime_monthly_bxtrender_trend, include_no_data_setting)))
+bool htf_bx_condition_2 = enable_trend_filter_2 and check_trend(daily_bxtrender_trend_settings_2, daily_bxtrender, daily_bxtrender_trend, false) and (check_trend(weekly_bxtrender_trend_settings_2, weekly_bxtrender, weekly_bxtrender_trend, false) or (enable_realtime_weekly_entries_condition and check_trend(weekly_bxtrender_trend_settings_2, realtime_weekly_bxtrender, realtime_weekly_bxtrender_trend, false))) and (check_trend(monthly_bxtrender_trend_settings_2, monthly_bxtrender, monthly_bxtrender_trend, include_no_data_setting) or (enable_realtime_monthly_entries_condition and check_trend(monthly_bxtrender_trend_settings_2, realtime_monthly_bxtrender, realtime_monthly_bxtrender_trend, include_no_data_setting)))
+bool htf_bx_condition_3 = enable_trend_filter_3 and check_trend(daily_bxtrender_trend_settings_3, daily_bxtrender, daily_bxtrender_trend, false) and (check_trend(weekly_bxtrender_trend_settings_3, weekly_bxtrender, weekly_bxtrender_trend, false) or (enable_realtime_weekly_entries_condition and check_trend(weekly_bxtrender_trend_settings_3, realtime_weekly_bxtrender, realtime_weekly_bxtrender_trend, false))) and (check_trend(monthly_bxtrender_trend_settings_3, monthly_bxtrender, monthly_bxtrender_trend, include_no_data_setting) or (enable_realtime_monthly_entries_condition and check_trend(monthly_bxtrender_trend_settings_3, realtime_monthly_bxtrender, realtime_monthly_bxtrender_trend, include_no_data_setting)))
+bool htf_bx_condition_4 = enable_trend_filter_4 and check_trend(daily_bxtrender_trend_settings_4, daily_bxtrender, daily_bxtrender_trend, false) and (check_trend(weekly_bxtrender_trend_settings_4, weekly_bxtrender, weekly_bxtrender_trend, false) or (enable_realtime_weekly_entries_condition and check_trend(weekly_bxtrender_trend_settings_4, realtime_weekly_bxtrender, realtime_weekly_bxtrender_trend, false))) and (check_trend(monthly_bxtrender_trend_settings_4, monthly_bxtrender, monthly_bxtrender_trend, include_no_data_setting) or (enable_realtime_monthly_entries_condition and check_trend(monthly_bxtrender_trend_settings_4, realtime_monthly_bxtrender, realtime_monthly_bxtrender_trend, include_no_data_setting)))
+
+bool htf_bx_condition = htf_bx_condition_1 or htf_bx_condition_2 or htf_bx_condition_3 or htf_bx_condition_4
+
+weekly_rsi_condition = not enable_weekly_rsi_filter or (weekly_rsi > weekly_rsi_ma or (enable_realtime_weekly_entries_condition and realtime_weekly_rsi > realtime_weekly_rsi_ma))
+monthly_rsi_condition = not enable_monthly_rsi_filter or (monthly_rsi > monthly_rsi_ma or (enable_realtime_monthly_entries_condition and realtime_monthly_rsi > realtime_monthly_rsi_ma))
+
+mb_condition = not enable_mb_filter or (check_mb(daily_mb_settings, daily_mb_bias, daily_mb_expansion) and check_mb(weekly_mb_settings, weekly_mb_bias, weekly_mb_expansion) and check_mb(monthly_mb_settings, monthly_mb_bias, monthly_mb_expansion))
+
+// Entry conditions
+bx_entry_condition = hourly_bxtrender_trend == trend.higher_high or (entry_setting == "Higher Low" and hourly_bxtrender_trend == trend.higher_low) or (enable_entry_hl_rsi_above_ma and current_rsi > current_rsi_ma and hourly_bxtrender_trend == trend.higher_low) or (enable_entry_hl_down_candle and hourly_bxtrender_trend == trend.higher_low and close < open)
+hourly_swing_entry_condition = close[candle_delay] > math.max(hourly_swing_sma_1[candle_delay], hourly_swing_sma_2[candle_delay]) and (not enable_rsi_condition or current_rsi[candle_delay] > current_rsi[candle_delay+1])
+weekly_watchlist_entry_condition = month != month[1]
+strategy_entry_condition = hourly_swing_strategy_enabled ? hourly_swing_entry_condition : weekly_watchlist_strategy_enabled ? weekly_watchlist_entry_condition : bxtrender_strategy_enabled ? bx_entry_condition : false
+
+// Exit conditions
+bx_exit_higher_low = exit_setting == "Higher Low" and ((hourly_bxtrender_trend == trend.higher_low and hourly_bxtrender_trend[1] == trend.lower_low) or (hourly_bxtrender_trend == trend.lower_low and hourly_bxtrender_trend[1] == trend.higher_low))
+bx_exit_condition = (exit_setting == "Lower Low" and hourly_bxtrender_trend == trend.lower_low) or bx_exit_higher_low or (exit_setting == "Lower High" and hourly_bxtrender_trend == trend.lower_high) or (enable_bx_stop_loss and close < stop_loss_level) 
+hourly_swing_exit_condition = (bars_in_trade >= tp_min_bars_to_exit and close > take_profit_level) or (bars_in_trade >= sl_min_bars_to_exit and close < stop_loss_level)
+weekly_watchlist_exit_condition = weekly_bxtrender_trend == (weekly_watchlist_exit_setting == "Higher Low" ? trend.higher_low : trend.lower_low) or (weekly_watchlist_exit_setting == "Lower High" and weekly_bxtrender_trend == trend.lower_high)
+strategy_exit_condition = hourly_swing_strategy_enabled ? hourly_swing_exit_condition : weekly_watchlist_strategy_enabled ? weekly_watchlist_exit_condition : bxtrender_strategy_enabled ? bx_exit_condition : false
+
+// Entry and exit conditions
+index = barstate_entry == "New Bar" and strategy != "Weekly Watchlist" ? 1 : 0
+entry_condition = strategy_entry_condition[index] and mb_condition[index] and weekly_rsi_condition[index] and monthly_rsi_condition[index] and htf_bx_condition[index]
+exit_condition = strategy_exit_condition[index]
+
+trade_before_close = trade_before_close_setting and syminfo.type == "stock"
+
+var bool eod_trade_check = false
+var bool eod_trade_check_done = false
+if barstate_entry == "Bar Confirmed" and timeframe.period == "60" and trade_before_close and barstate.isrealtime
+    if hour == 15 and minute(timenow) == trade_before_close_minute and not eod_trade_check_done
+        eod_trade_check := true
+        eod_trade_check_done := true
+    else if hour == 15 and minute(timenow) > trade_before_close_minute
+        eod_trade_check := false
+    else if hour != 15 and eod_trade_check_done
+        eod_trade_check := false
+        eod_trade_check_done := false
+
+barconfirmed = (trade_before_close and (((hour != 15 or not barstate.islastconfirmedhistory) and barstate.isconfirmed) or (barstate.isrealtime and hour == 15 and eod_trade_check))) or (not trade_before_close and barstate.isconfirmed)
+
+entry_timing = (barstate_entry == "Bar Confirmed" and barconfirmed) or (barstate_entry == "New Bar" and (barstate.isnew or strategy == "Weekly Watchlist"))
+
+get_trade_data() =>
+    "{\"daily_bx\":" + str.tostring(daily_bxtrender, "#.##") + 
+     ",\"daily_bx_previous\":" + str.tostring(daily_bxtrender_prev, "#.##") + 
+     ",\"weekly_bx\":" + str.tostring(weekly_bxtrender, "#.##") + 
+     ",\"weekly_bx_previous\":" + str.tostring(weekly_bxtrender_prev, "#.##") + 
+     ",\"monthly_bx\":" + (na(monthly_bxtrender) ? "null" : str.tostring(monthly_bxtrender, "#.##")) + 
+     ",\"monthly_bx_previous\":" + (na(monthly_bxtrender_prev) ? "null" : str.tostring(monthly_bxtrender_prev, "#.##")) + "}"
+
+// Store which trend filters matched for this trade
+var bool trend_filter_1_matched = false
+var bool trend_filter_2_matched = false
+var bool trend_filter_3_matched = false
+var bool trend_filter_4_matched = false
+
+var trend entry_daily_trend = na
+var trend entry_weekly_trend = na
+var trend entry_monthly_trend = na
+
+var line trade_entry_line = na
+var line trade_exit_line = na
+
+var line take_profit_line = na
+var line stop_loss_line = na
+
+// Handle trade entry
+if not in_trade and entry_condition and is_post_backtest_trade   
+
+    // Calculate position size based on composite score
+    position_size := base_position_size
+
+    // Create trend filter match text and calculate combined stats
+    trend_filter_text = ""
+
+    if htf_bx_condition_1
+        trend_filter_text := trend_filter_text + "TF1"
+    if htf_bx_condition_2
+        trend_filter_text := trend_filter_text + (trend_filter_text != "" ? "+" : "") + "TF2"
+    if htf_bx_condition_3
+        trend_filter_text := trend_filter_text + (trend_filter_text != "" ? "+" : "") + "TF3"
+    if htf_bx_condition_4
+        trend_filter_text := trend_filter_text + (trend_filter_text != "" ? "+" : "") + "TF4"
+
+    label.new(bar_index, low, 
+         text="Entry (" + trend_filter_text + ")\n" + (barstate_entry == "New Bar" ? "O: " : "C: ") + str.tostring(barstate_entry == "New Bar" ? open : close, "#.##"), 
+         color=barconfirmed or barstate_entry == "New Bar" ? color.blue : color.orange,
+         style=label.style_label_up, 
+         textcolor=color.white, 
+         size=label_text_size)
+
+    if entry_timing
+        in_trade := true
+        entry_price := barstate_entry == "New Bar" ? open : close
+        if total_trades == 0
+            buy_and_hold_entry_price := entry_price
+        if enable_strategy
+            strategy.entry("Long", strategy.long)
+        bars_in_trade := 0
+        eod_trade_check := false  // Reset after entry
+
+        if strategy == "B-Xtrender"
+            if enable_bx_stop_loss
+                stop_loss_level := entry_price * (1 - bx_stop_loss / 100)
+            
+            trade_entry_line := line.new(bar_index, entry_price, bar_index, entry_price, color=color.white, style=line.style_dashed)
+            trade_exit_line := line.new(bar_index, entry_price, bar_index, entry_price, color=color.white, style=line.style_dashed)
+        else if strategy == "Hourly Swing/Quant Bot"
+            take_profit_level := entry_price * (1 + take_profit_percent / 100)
+            stop_loss_level := entry_price * (1 - stop_loss_percent / 100)
+            take_profit_line := line.new(bar_index, take_profit_level, bar_index, take_profit_level, style = line.style_dashed, color=color.white)
+            stop_loss_line := line.new(bar_index, stop_loss_level, bar_index, stop_loss_level, style = line.style_dashed, color=color.white)
+
+
+        entry_daily_trend := daily_bxtrender_trend
+        entry_weekly_trend := weekly_bxtrender_trend
+        entry_monthly_trend := monthly_bxtrender_trend
+        
+        trend_filter_1_matched := htf_bx_condition_1
+        trend_filter_2_matched := htf_bx_condition_2
+        trend_filter_3_matched := htf_bx_condition_3
+        trend_filter_4_matched := htf_bx_condition_4
+
+        alert("{\"msg\":\"📈🔵 ENTRY\",\"type\":\""+syminfo.type+"\",\"action\":\"buy\",\"price\":"+str.tostring(entry_price)+",\"ticker\":\""+syminfo.ticker+"\",\"time\":\""+str.tostring(timenow)+"\",\"strategy_name\":\""+alert_strategy_name+"\",\"strategy_secret\":\""+alert_strategy_secret+"\",\"trade_data\":"+get_trade_data()+"}", alert.freq_once_per_bar)
+
+// Set independent tracking based on core entry logic (without HTF filters)
+core_entry_condition = strategy_entry_condition[index]
+if not independent_trade_tracking and core_entry_condition and is_post_backtest_trade and entry_timing
+    independent_trade_tracking := true
+    independent_entry_price := barstate_entry == "New Bar" ? open : close
+    independent_bars_in_trade := 0
+
+if in_trade
+    if strategy == "B-Xtrender"
+        line.set_x2(trade_entry_line, bar_index)
+        line.set_x2(trade_exit_line, bar_index)
+        line.set_y1(trade_exit_line, close)
+        line.set_y2(trade_exit_line, close)
+        line.set_color(trade_exit_line, close > entry_price ? color.green : color.red)
+    else if strategy == "Hourly Swing/Quant Bot"
+        line.set_x2(take_profit_line, bar_index)
+        line.set_x2(stop_loss_line, bar_index)
+
+// Handle trade exit
+if in_trade and exit_condition and bars_in_trade > 0
+    exit_price = barstate_entry == "New Bar" ? open : close
+    exit_percentage := (exit_price - entry_price) / entry_price * 100
+    
+
+    label.new(bar_index, high, text=str.tostring(exit_percentage, "#.##") + "%\n" + (barstate_entry == "New Bar" ? "O: " : "C: ") + str.tostring(barstate_entry == "New Bar" ? open : close, "#.##"), 
+         color=barconfirmed or barstate_entry == "New Bar" ? exit_percentage > 0 ? color.green : color.red : color.purple, 
+         style=label.style_label_down, 
+         textcolor=color.white, 
+         size=label_text_size)
+
+    if entry_timing
+        in_trade := false
+        if enable_strategy
+            strategy.close("Long")
+        eod_trade_check := false  // Reset after exit to prevent re-entry
+
+        if strategy == "B-Xtrender"
+            line.set_y1(trade_exit_line, exit_price)
+            line.set_y2(trade_exit_line, exit_price)
+            line.set_color(trade_exit_line, exit_price > entry_price ? color.green : color.red)
+        else if strategy == "Hourly Swing/Quant Bot"
+            take_profit_line := na
+            stop_loss_line := na
+            take_profit_level := na
+            stop_loss_level := na
+
+        // Clear independent tracking when main trade exits normally
+        independent_trade_tracking := false
+        independent_entry_price := na
+        independent_bars_in_trade := 0
+
+        // Calculate profit/loss in dollars based on position size
+        float trade_pnl = current_account_size * (position_size / 100) * (exit_percentage / 100)
+        current_account_size := current_account_size + trade_pnl
+        
+        // Update peak and drawdown
+        peak_account_size := math.max(peak_account_size, current_account_size)
+        max_account_drawdown_pct := math.min(max_account_drawdown_pct, (current_account_size - peak_account_size) / peak_account_size * 100)
+
+        // Update statistics for each matching trend filter
+        if trend_filter_1_matched
+            trend_filter_1_trades := trend_filter_1_trades + 1
+            trend_filter_1_profit := trend_filter_1_profit + exit_percentage
+            if exit_percentage > 0
+                trend_filter_1_wins := trend_filter_1_wins + 1
+                trend_filter_1_win_sum := trend_filter_1_win_sum + exit_percentage
+            else
+                trend_filter_1_losses := trend_filter_1_losses + 1
+                trend_filter_1_loss_sum := trend_filter_1_loss_sum + exit_percentage
+
+        if trend_filter_2_matched
+            trend_filter_2_trades := trend_filter_2_trades + 1
+            trend_filter_2_profit := trend_filter_2_profit + exit_percentage
+            if exit_percentage > 0
+                trend_filter_2_wins := trend_filter_2_wins + 1
+                trend_filter_2_win_sum := trend_filter_2_win_sum + exit_percentage
+            else
+                trend_filter_2_losses := trend_filter_2_losses + 1
+                trend_filter_2_loss_sum := trend_filter_2_loss_sum + exit_percentage
+
+        if trend_filter_3_matched
+            trend_filter_3_trades := trend_filter_3_trades + 1
+            trend_filter_3_profit := trend_filter_3_profit + exit_percentage
+            if exit_percentage > 0
+                trend_filter_3_wins := trend_filter_3_wins + 1
+                trend_filter_3_win_sum := trend_filter_3_win_sum + exit_percentage
+            else
+                trend_filter_3_losses := trend_filter_3_losses + 1
+                trend_filter_3_loss_sum := trend_filter_3_loss_sum + exit_percentage
+
+        if trend_filter_4_matched
+            trend_filter_4_trades := trend_filter_4_trades + 1
+            trend_filter_4_profit := trend_filter_4_profit + exit_percentage
+            if exit_percentage > 0
+                trend_filter_4_wins := trend_filter_4_wins + 1
+                trend_filter_4_win_sum := trend_filter_4_win_sum + exit_percentage
+            else
+                trend_filter_4_losses := trend_filter_4_losses + 1
+                trend_filter_4_loss_sum := trend_filter_4_loss_sum + exit_percentage
+            
+
+        if exit_percentage > 0
+            exit_reason := "Take Profit"
+
+            // Update statistics for winning trade
+            total_trades := total_trades + 1
+            winning_trades := winning_trades + 1
+            cumulative_profit_loss := cumulative_profit_loss + exit_percentage
+            sum_wins := sum_wins + exit_percentage
+            avg_win := sum_wins / winning_trades
+            max_profit := math.max(max_profit, exit_percentage)
+            sum_profit := sum_profit + exit_percentage
+            
+            // Update peak value and max drawdown
+            peak_value := math.max(peak_value, cumulative_profit_loss)
+            max_drawdown := math.min(max_drawdown, cumulative_profit_loss - peak_value)
+            
+            alert("{\"msg\":\"📈🟢 EXIT "+str.tostring(exit_percentage, "#.##")+"%\",\"type\":\""+syminfo.type+"\",\"action\":\"sell\",\"price\":"+str.tostring(exit_price)+",\"ticker\":\""+syminfo.ticker+"\",\"time\":\""+str.tostring(timenow)+"\",\"strategy_name\":\""+alert_strategy_name+"\",\"strategy_secret\":\""+alert_strategy_secret+"\",\"profit\":"+str.tostring(exit_percentage, "#.##")+",\"bars_in_trade\":"+str.tostring(bars_in_trade)+",\"trade_data\":"+get_trade_data()+"}", alert.freq_once_per_bar)
+        else
+            exit_reason := "Stop Loss"
+
+            // Update statistics for losing trade
+            total_trades := total_trades + 1
+            losing_trades := losing_trades + 1
+            cumulative_profit_loss := cumulative_profit_loss + exit_percentage
+            sum_losses := sum_losses + exit_percentage
+            avg_loss := sum_losses / losing_trades
+            max_loss := math.min(max_loss, exit_percentage)
+            sum_loss := sum_loss + exit_percentage
+            
+            // Update peak value and max drawdown
+            peak_value := math.max(peak_value, cumulative_profit_loss)
+            max_drawdown := math.min(max_drawdown, cumulative_profit_loss - peak_value)
+
+            alert("{\"msg\":\"📈🔴 EXIT "+str.tostring(exit_percentage, "#.##")+"%\",\"type\":\""+syminfo.type+"\",\"action\":\"sell\",\"price\":"+str.tostring(exit_price)+",\"ticker\":\""+syminfo.ticker+"\",\"time\":\""+str.tostring(timenow)+"\",\"strategy_name\":\""+alert_strategy_name+"\",\"strategy_secret\":\""+alert_strategy_secret+"\",\"profit\":"+str.tostring(exit_percentage, "#.##")+",\"bars_in_trade\":"+str.tostring(bars_in_trade)+",\"trade_data\":"+get_trade_data()+"}", alert.freq_once_per_bar)
+
+if in_trade
+    bars_in_trade := bars_in_trade + 1
+
+// Detect HTF condition mismatch for repainting issues
+if independent_trade_tracking and not in_trade and exit_condition and independent_bars_in_trade > 0 and entry_timing
+    mismatch_exit_price = barstate_entry == "New Bar" ? open : close
+    mismatch_exit_percentage = (mismatch_exit_price - independent_entry_price) / independent_entry_price * 100
+    
+    // Send exit alert for HTF condition mismatch
+    if send_htf_mismatch_alerts
+        alert("{\"msg\":\"📈🟡 HTF MISMATCH EXIT "+str.tostring(mismatch_exit_percentage, "#.##")+"%\",\"type\":\""+syminfo.type+"\",\"action\":\"sell\",\"price\":"+str.tostring(mismatch_exit_price)+",\"ticker\":\""+syminfo.ticker+"\",\"time\":\""+str.tostring(timenow)+"\",\"strategy_name\":\""+alert_strategy_name+"\",\"strategy_secret\":\""+alert_strategy_secret+"\",\"profit\":"+str.tostring(mismatch_exit_percentage, "#.##")+",\"bars_in_trade\":"+str.tostring(independent_bars_in_trade)+",\"reason\":\"HTF Condition Mismatch\",\"trade_data\":"+get_trade_data()+"}", alert.freq_once_per_bar)
+    
+    // Clear independent tracking after sending alert
+    independent_trade_tracking := false
+    independent_entry_price := na
+    independent_bars_in_trade := 0
+
+// Update independent tracking
+if independent_trade_tracking
+    independent_bars_in_trade := independent_bars_in_trade + 1
+
+// Update table on each bar
+if barstate.islast
+    string warning_text = ""
+    if strategy == "Hourly Swing/Quant Bot" and not hourly_swing_strategy_enabled
+        warning_text := "Hourly Swing requires 1h timeframe and Quant Bot requires 15m timeframe"
+    else if strategy == "Weekly Watchlist" and not weekly_watchlist_strategy_enabled
+        warning_text := "Weekly Watchlist requires daily timeframe"
+    else if strategy == "B-Xtrender" and not bxtrender_strategy_enabled
+        warning_text := "B-Xtrender requires at least 1h timeframe"
+
+    if warning_text != ""
+        var table warning_table = table.new(position.top_center, 1, 1, bgcolor = color.rgb(0, 0, 0), frame_width = 1, frame_color = color.red, border_width = 1, border_color = color.red)
+        table.cell(warning_table, 0, 0, warning_text, text_color = color.white, text_size = size.large)
+
+    // Calculate win rates and averages for each trend
+    float trend_1_win_rate = trend_filter_1_trades > 0 ? (trend_filter_1_wins / trend_filter_1_trades) * 100 : 0.0
+    float trend_2_win_rate = trend_filter_2_trades > 0 ? (trend_filter_2_wins / trend_filter_2_trades) * 100 : 0.0
+    float trend_3_win_rate = trend_filter_3_trades > 0 ? (trend_filter_3_wins / trend_filter_3_trades) * 100 : 0.0
+    float trend_4_win_rate = trend_filter_4_trades > 0 ? (trend_filter_4_wins / trend_filter_4_trades) * 100 : 0.0
+    
+    float trend_1_avg_win = trend_filter_1_wins > 0 ? trend_filter_1_win_sum / trend_filter_1_wins : 0.0
+    float trend_1_avg_loss = trend_filter_1_losses > 0 ? trend_filter_1_loss_sum / trend_filter_1_losses : 0.0
+    float trend_2_avg_win = trend_filter_2_wins > 0 ? trend_filter_2_win_sum / trend_filter_2_wins : 0.0
+    float trend_2_avg_loss = trend_filter_2_losses > 0 ? trend_filter_2_loss_sum / trend_filter_2_losses : 0.0
+    float trend_3_avg_win = trend_filter_3_wins > 0 ? trend_filter_3_win_sum / trend_filter_3_wins : 0.0
+    float trend_3_avg_loss = trend_filter_3_losses > 0 ? trend_filter_3_loss_sum / trend_filter_3_losses : 0.0
+    float trend_4_avg_win = trend_filter_4_wins > 0 ? trend_filter_4_win_sum / trend_filter_4_wins : 0.0
+    float trend_4_avg_loss = trend_filter_4_losses > 0 ? trend_filter_4_loss_sum / trend_filter_4_losses : 0.0
+    
+    float trend_1_rr = math.abs(trend_1_avg_win) / math.abs(trend_1_avg_loss)
+    float trend_2_rr = math.abs(trend_2_avg_win) / math.abs(trend_2_avg_loss)
+    float trend_3_rr = math.abs(trend_3_avg_win) / math.abs(trend_3_avg_loss)
+    float trend_4_rr = math.abs(trend_4_avg_win) / math.abs(trend_4_avg_loss)
+    
+    // Calculate win rates
+    float win_rate = total_trades > 0 ? (winning_trades / total_trades) * 100 : 0.0
+    
+    // Create table with custom settings only if show_stats_table is enabled
+    if show_stats_table
+        // Calculate number of rows needed based on enabled trend filters
+        int enabled_filters = (enable_trend_filter_1 ? 3 : 0) + (enable_trend_filter_2 ? 3 : 0) + (enable_trend_filter_3 ? 3 : 0) + (enable_trend_filter_4 ? 3 : 0)
+        int total_rows = 15 + (show_bxtrender_rows ? 5 : 0) + 1 + enabled_filters + 13 + 7
+        
+        var table stats_table = table.new(stats_table_position == "top_right" ? position.top_right : position.top_left, 2, total_rows, 
+                                         bgcolor = table_bg_color, 
+                                         frame_width = 1, frame_color = table_border_color, 
+                                         border_width = 1, border_color = table_border_color)
+        
+        // Table headers
+        table.merge_cells(stats_table, 0, 0, 1, 0)
+        table.cell(stats_table, 0, 0, "B-Xtrender Bot - THT @chewy", 
+                   text_color = color.white, 
+                   bgcolor = table_header_color, 
+                   text_size = table_text_size)
+
+        int current_row = 1
+
+        table.merge_cells(stats_table, 1, current_row, 1, current_row)
+        table.cell(stats_table, 0, current_row, "Strategy", text_color = color.white, text_size = table_text_size)
+        table.cell(stats_table, 1, current_row, strategy, text_color = strategy == "Hourly Swing/Quant Bot" ? color.rgb(89, 169, 235) : strategy == "Weekly Watchlist" ? color.orange : color.rgb(235, 22, 206), text_size = table_text_size) 
+        current_row := current_row + 1
+
+        // Ticker and Backtest Info
+        table.cell(stats_table, 0, current_row, "Symbol", text_color = color.white, text_size = table_text_size)
+        table.cell(stats_table, 1, current_row, syminfo.ticker, text_color = color.white, text_size = table_text_size)
+        current_row := current_row + 1
+
+        table.cell(stats_table, 0, current_row, "Timeframe", text_color = color.white, text_size = table_text_size)
+        table.cell(stats_table, 1, current_row, timeframe.period, text_color = color.white, text_size = table_text_size)
+        current_row := current_row + 1
+
+        table.cell(stats_table, 0, current_row, "Backtest Date", text_color = color.white, text_size = table_text_size)
+        table.cell(stats_table, 1, current_row, (use_backtest_date ? str.format("{0,date,yyyy-MM-dd}", backtest_time) : "Disabled") + " | " + (use_backtest_stop_date ? str.format("{0,date,yyyy-MM-dd}", backtest_stop_time) : "Disabled"), text_color = color.white, text_size = table_text_size)
+        current_row := current_row + 1
+
+        // Entry and Exit Settings
+        table.cell(stats_table, 0, current_row, "Trade Timing", text_color = color.white, text_size = table_text_size)
+        table.cell(stats_table, 1, current_row, barstate_entry, text_color = color.white, text_size = table_text_size)
+        current_row := current_row + 1
+
+        if strategy == "B-Xtrender"
+            table.cell(stats_table, 0, current_row, "Entry | Exit Condition", text_color = color.white, text_size = table_text_size)
+            table.cell(stats_table, 1, current_row, entry_setting + " | " + exit_setting, text_color = color.teal, text_size = table_text_size)
+        else if strategy == "Hourly Swing/Quant Bot"
+            table.cell(stats_table, 0, current_row, "TP/Bars | SL/Bars | CD", text_color = color.white, text_size = table_text_size)
+            table.cell(stats_table, 1, current_row, str.tostring(take_profit_percent, "#.##") + "%/" + str.tostring(tp_min_bars_to_exit) + " | -" + str.tostring(stop_loss_percent, "#.##") + "%/" + str.tostring(sl_min_bars_to_exit) + " | " + str.tostring(candle_delay), text_color = color.teal, text_size = table_text_size)
+        else if strategy == "Weekly Watchlist"
+            table.cell(stats_table, 0, current_row, "Exit Condition", text_color = color.white, text_size = table_text_size)
+            table.cell(stats_table, 1, current_row, weekly_watchlist_exit_setting, text_color = color.teal, text_size = table_text_size)
+        current_row := current_row + 1
+
+        if enable_bx_stop_loss
+            table.cell(stats_table, 0, current_row, "Stop Loss", text_color = color.white, text_size = table_text_size)
+            table.cell(stats_table, 1, current_row, str.tostring(bx_stop_loss, "#.##") +"%", text_color = color.teal, text_size = table_text_size)
+            current_row := current_row + 1
+
+        // B-Xtrender Values (only shown if enabled)
+        if show_bxtrender_rows
+            table.merge_cells(stats_table, 0, current_row, 1, current_row)
+            table.cell(stats_table, 0, current_row, "B-Xtrender Values", 
+                      text_color = color.white, 
+                      bgcolor = table_header_color, 
+                      text_size = table_text_size)
+            
+            hourly_bxtrender_color = hourly_bxtrender > 0 ? color.new(color.green, 20) : color.new(color.red, 20)
+            table.cell(stats_table, 0, current_row + 1, "Hourly", text_color = color.white, text_size = table_text_size)
+            table.cell(stats_table, 1, current_row + 1, str.tostring(hourly_bxtrender, "#.##"), 
+                      bgcolor=hourly_bxtrender_color, text_color = color.white, text_size = table_text_size)
+            
+            daily_bxtrender_color = daily_bxtrender > 0 ? color.new(color.green, 20) : color.new(color.red, 20)
+            table.cell(stats_table, 0, current_row + 2, "Daily", text_color = color.white, text_size = table_text_size)
+            table.cell(stats_table, 1, current_row + 2, str.tostring(daily_bxtrender, "#.##"), 
+                      bgcolor=daily_bxtrender_color, text_color = color.white, text_size = table_text_size)
+            
+            weekly_bxtrender_color = weekly_bxtrender > 0 ? color.new(color.green, 20) : (weekly_bxtrender_trend == trend.higher_low ? color.new(color.yellow, 20) : color.new(color.red, 20))
+            table.cell(stats_table, 0, current_row + 3, "Weekly", text_color = color.white, text_size = table_text_size)
+            table.cell(stats_table, 1, current_row + 3, str.tostring(weekly_bxtrender, "#.##"), 
+                      bgcolor=weekly_bxtrender_color, text_color = color.white, text_size = table_text_size)
+            
+            monthly_bxtrender_color = monthly_bxtrender > 0 ? color.new(color.green, 20) : (monthly_bxtrender_trend == trend.higher_low ? color.new(color.yellow, 20) : color.new(color.red, 20))
+            table.cell(stats_table, 0, current_row + 4, "Monthly", text_color = color.white, text_size = table_text_size)
+            table.cell(stats_table, 1, current_row + 4, str.tostring(monthly_bxtrender, "#.##"), 
+                      bgcolor=monthly_bxtrender_color, text_color = color.white, text_size = table_text_size)
+            current_row := current_row + 5
+        
+        // Monthly Trend Statistics
+        table.merge_cells(stats_table, 0, current_row, 1, current_row)
+        table.cell(stats_table, 0, current_row, "Filters", 
+                   text_color = color.white, 
+                   bgcolor = table_header_color, 
+                   text_size = table_text_size)
+        current_row := current_row + 1
+        
+        // Trend Filter Stats (only shown if enabled)
+        if enable_trend_filter_1
+            table.cell(stats_table, 0, current_row, "BX Filter 1", text_color = color.white, text_size = table_text_size)
+            table.cell(stats_table, 1, current_row, daily_bxtrender_trend_settings_1 + " | " + weekly_bxtrender_trend_settings_1 + " | " + monthly_bxtrender_trend_settings_1, text_color = color.teal, text_size = table_text_size)
+            current_row := current_row + 1
+            if show_bx_filter_stats
+                table.cell(stats_table, 0, current_row, "BXF1 Trades", text_color = color.white, text_size = table_text_size)
+                table.cell(stats_table, 1, current_row, str.tostring(trend_filter_1_trades) + " trades, " + str.tostring(trend_1_win_rate, "#.##") + "% WR, " + str.tostring(trend_filter_1_profit, "#.##") + "% P/L", text_color = color.white, text_size = table_text_size)
+                current_row := current_row + 1
+                table.cell(stats_table, 0, current_row, "BXF1 Avg Win/Loss", text_color = color.white, text_size = table_text_size)
+                table.cell(stats_table, 1, current_row, str.tostring(trend_1_avg_win, "#.##") + "% | " + str.tostring(trend_1_avg_loss, "#.##") + "% (R/R: " + str.tostring(trend_1_rr, "#.##") + ")", text_color = color.white, text_size = table_text_size)
+                current_row := current_row + 1
+        
+        if enable_trend_filter_2
+            table.cell(stats_table, 0, current_row, "BX Filter 2", text_color = color.white, text_size = table_text_size)
+            table.cell(stats_table, 1, current_row, daily_bxtrender_trend_settings_2 + " | " + weekly_bxtrender_trend_settings_2 + " | " + monthly_bxtrender_trend_settings_2, text_color = color.teal, text_size = table_text_size)
+            current_row := current_row + 1
+
+            if show_bx_filter_stats
+                table.cell(stats_table, 0, current_row, "BXF2 Trades", text_color = color.white, text_size = table_text_size)
+                table.cell(stats_table, 1, current_row, str.tostring(trend_filter_2_trades) + " trades, " + str.tostring(trend_2_win_rate, "#.##") + "% WR, " + str.tostring(trend_filter_2_profit, "#.##") + "% P/L", text_color = color.white, text_size = table_text_size)
+                current_row := current_row + 1
+                table.cell(stats_table, 0, current_row, "BXF2 Avg Win/Loss", text_color = color.white, text_size = table_text_size)
+                table.cell(stats_table, 1, current_row, str.tostring(trend_2_avg_win, "#.##") + "% | " + str.tostring(trend_2_avg_loss, "#.##") + "% (R/R: " + str.tostring(trend_2_rr, "#.##") + ")", text_color = color.white, text_size = table_text_size)
+                current_row := current_row + 1
+        
+        if enable_trend_filter_3
+            table.cell(stats_table, 0, current_row, "BX Filter 3", text_color = color.white, text_size = table_text_size)
+            table.cell(stats_table, 1, current_row, daily_bxtrender_trend_settings_3 + " | " + weekly_bxtrender_trend_settings_3 + " | " + monthly_bxtrender_trend_settings_3, text_color = color.teal, text_size = table_text_size)
+            current_row := current_row + 1
+
+            if show_bx_filter_stats
+                table.cell(stats_table, 0, current_row, "BXF3 Trades", text_color = color.white, text_size = table_text_size)
+                table.cell(stats_table, 1, current_row, str.tostring(trend_filter_3_trades) + " trades, " + str.tostring(trend_3_win_rate, "#.##") + "% WR, " + str.tostring(trend_filter_3_profit, "#.##") + "% P/L", text_color = color.white, text_size = table_text_size)
+                current_row := current_row + 1
+                table.cell(stats_table, 0, current_row, "BXF3 Avg Win/Loss", text_color = color.white, text_size = table_text_size)
+                table.cell(stats_table, 1, current_row, str.tostring(trend_3_avg_win, "#.##") + "% | " + str.tostring(trend_3_avg_loss, "#.##") + "% (R/R: " + str.tostring(trend_3_rr, "#.##") + ")", text_color = color.white, text_size = table_text_size)
+                current_row := current_row + 1
+        
+        if enable_trend_filter_4
+            table.cell(stats_table, 0, current_row, "BX Filter 4", text_color = color.white, text_size = table_text_size)
+            table.cell(stats_table, 1, current_row, daily_bxtrender_trend_settings_4 + " | " + weekly_bxtrender_trend_settings_4 + " | " + monthly_bxtrender_trend_settings_4, text_color = color.teal, text_size = table_text_size)
+            current_row := current_row + 1
+
+            if show_bx_filter_stats
+                table.cell(stats_table, 0, current_row, "BXF4 Trades", text_color = color.white, text_size = table_text_size)
+                table.cell(stats_table, 1, current_row, str.tostring(trend_filter_4_trades) + " trades, " + str.tostring(trend_4_win_rate, "#.##") + "% WR, " + str.tostring(trend_filter_4_profit, "#.##") + "% P/L", text_color = color.white, text_size = table_text_size)
+                current_row := current_row + 1
+                table.cell(stats_table, 0, current_row, "BXF4 Avg Win/Loss", text_color = color.white, text_size = table_text_size)
+                table.cell(stats_table, 1, current_row, str.tostring(trend_4_avg_win, "#.##") + "% | " + str.tostring(trend_4_avg_loss, "#.##") + "% (R/R: " + str.tostring(trend_4_rr, "#.##") + ")", text_color = color.white, text_size = table_text_size)
+                current_row := current_row + 1
+        
+        table.cell(stats_table, 0, current_row, "RSI Filter - W | M", text_color = color.white, text_size = table_text_size)
+        table.cell(stats_table, 1, current_row, (enable_weekly_rsi_filter ? "Enabled" : "Disabled") + " | " + (enable_monthly_rsi_filter ? "Enabled" : "Disabled"), text_color = enable_weekly_rsi_filter or enable_monthly_rsi_filter ? color.teal : color.white, text_size = table_text_size)
+        current_row := current_row + 1
+
+        table.cell(stats_table, 0, current_row, "MB Filter - D | W | M", text_color = color.white, text_size = table_text_size)
+        table.cell(stats_table, 1, current_row, enable_mb_filter ? "Enabled - " + daily_mb_settings + " | " + weekly_mb_settings + " | " + monthly_mb_settings : "Disabled", text_color = enable_mb_filter ? color.teal : color.white, text_size = table_text_size)
+        current_row := current_row + 1
+
+        // Repainting Status
+        table.cell(stats_table, 0, current_row, "Repainting - D | W | M", text_color = color.white, text_size = table_text_size)
+        table.cell(stats_table, 1, current_row, (repaint_daily ? "Enabled" : "Disabled") + " | " + (repaint_weekly or enable_realtime_weekly_entries_condition ? "Enabled" : "Disabled") +  " | " + ((repaint_monthly or enable_realtime_monthly_entries_condition) ? "Enabled" : "Disabled"), text_color = repaint_daily or repaint_weekly or repaint_monthly or enable_realtime_weekly_entries_condition or enable_realtime_monthly_entries_condition ? color.yellow : color.green, text_size = table_text_size)
+        current_row := current_row + 1
+
+        // Trade Statistics Section
+
+        table.merge_cells(stats_table, 0, current_row, 1, current_row)
+        table.cell(stats_table, 0, current_row, "Trade Statistics", text_color = color.white, bgcolor = table_header_color, text_size = table_text_size)
+        current_row := current_row + 1
+        
+        table.cell(stats_table, 0, current_row, "Total Trades", text_color = color.white, text_size = table_text_size)
+        table.cell(stats_table, 1, current_row, str.tostring(total_trades), text_color = color.white, text_size = table_text_size)
+        current_row := current_row + 1
+        
+        table.cell(stats_table, 0, current_row, "Wins", text_color = color.white, text_size = table_text_size)
+        table.cell(stats_table, 1, current_row, str.tostring(winning_trades), text_color = color.green, text_size = table_text_size)
+        current_row := current_row + 1
+        
+        table.cell(stats_table, 0, current_row, "Losses", text_color = color.white, text_size = table_text_size)
+        table.cell(stats_table, 1, current_row, str.tostring(losing_trades), text_color = color.red, text_size = table_text_size)
+        current_row := current_row + 1
+        
+        table.cell(stats_table, 0, current_row, "Avg Profit", text_color = color.white, text_size = table_text_size)
+        table.cell(stats_table, 1, current_row, str.tostring(avg_win, "#.##") + "%", text_color = color.green, text_size = table_text_size)
+        current_row := current_row + 1
+        
+        table.cell(stats_table, 0, current_row, "Avg Loss", text_color = color.white, text_size = table_text_size)
+        table.cell(stats_table, 1, current_row, str.tostring(avg_loss, "#.##") + "%", text_color = color.red, text_size = table_text_size)
+        current_row := current_row + 1
+
+        table.cell(stats_table, 0, current_row, "Max Profit", text_color = color.white, text_size = table_text_size)
+        table.cell(stats_table, 1, current_row, str.tostring(max_profit, "#.##") + "%", text_color = color.green, text_size = table_text_size)
+        current_row := current_row + 1
+
+        table.cell(stats_table, 0, current_row, "Max Loss", text_color = color.white, text_size = table_text_size)
+        table.cell(stats_table, 1, current_row, str.tostring(max_loss, "#.##") + "%", text_color = color.red, text_size = table_text_size)
+        current_row := current_row + 1
+
+        table.merge_cells(stats_table, 0, current_row, 1, current_row)
+        table.cell(stats_table, 0, current_row, "Peformance Metrics", text_color = color.white, bgcolor = table_header_color, text_size = table_text_size)
+        current_row := current_row + 1
+
+        profit_factor = math.abs(sum_profit) / math.abs(sum_loss)
+        expected_value = (win_rate/100 * avg_win) + ((100-win_rate)/100 * avg_loss)
+        risk_reward_ratio = math.abs(avg_win) / math.abs(avg_loss)
+
+        table.cell(stats_table, 0, current_row, "Win Rate", text_color = color.white, text_size = table_text_size)
+        table.cell(stats_table, 1, current_row, str.tostring(win_rate, "#.##") + "%", 
+                     text_color = profit_factor >= 1 ? color.green : color.red, text_size = table_text_size)
+        current_row := current_row + 1
+        
+        table.cell(stats_table, 0, current_row, "Cumulative P/L", text_color = color.white, text_size = table_text_size)
+        table.cell(stats_table, 1, current_row, str.tostring(cumulative_profit_loss, "#.##") + "%", 
+                     text_color = cumulative_profit_loss >= 0 ? color.green : color.red, text_size = table_text_size)
+        current_row := current_row + 1
+        
+        table.cell(stats_table, 0, current_row, "Max Drawdown", text_color = color.white, text_size = table_text_size)
+        table.cell(stats_table, 1, current_row, str.tostring(math.abs(max_drawdown), "#.##") + "%", text_color = color.red, text_size = table_text_size)
+        current_row := current_row + 1
+        
+        table.cell(stats_table, 0, current_row, "Expected Value", text_color = color.white, text_size = table_text_size)
+        table.cell(stats_table, 1, current_row, str.tostring(expected_value, "#.##") + "%", 
+                     text_color = expected_value >= 0 ? color.green : color.red, text_size = table_text_size)
+        current_row := current_row + 1
+        
+        table.cell(stats_table, 0, current_row, "Risk/Reward Ratio", text_color = color.white, text_size = table_text_size)
+        table.cell(stats_table, 1, current_row, str.tostring(risk_reward_ratio, "#.##"), 
+                     text_color = risk_reward_ratio >= 0 ? color.green : color.red, text_size = table_text_size)
+        current_row := current_row + 1
+
+        
+        table.cell(stats_table, 0, current_row, "Profit Factor", text_color = color.white, text_size = table_text_size)
+        table.cell(stats_table, 1, current_row, str.tostring(profit_factor, "#.##"), 
+                     text_color = profit_factor >= 1 ? color.green : color.red, text_size = table_text_size)
+        current_row := current_row + 1
+
+        // Account Statistics Section
+        table.merge_cells(stats_table, 0, current_row, 1, current_row)
+        table.cell(stats_table, 0, current_row, "Account Statistics", text_color = color.white, bgcolor = table_header_color, text_size = table_text_size)
+        current_row := current_row + 1
+        
+        table.cell(stats_table, 0, current_row, "Initial Account", text_color = color.white, text_size = table_text_size)
+        table.cell(stats_table, 1, current_row, "$" + str.tostring(initial_account_size, "#.##"), text_color = color.white, text_size = table_text_size)
+        current_row := current_row + 1
+        
+        table.cell(stats_table, 0, current_row, "Position Size", text_color = color.white, text_size = table_text_size)
+        table.cell(stats_table, 1, current_row, str.tostring(base_position_size, "#.##") + "%", text_color = color.white, text_size = table_text_size)
+        current_row := current_row + 1
+        
+        table.cell(stats_table, 0, current_row, "Current Account", text_color = color.white, text_size = table_text_size)
+        table.cell(stats_table, 1, current_row, "$" + str.tostring(current_account_size, "#.##"), 
+                     text_color = current_account_size >= initial_account_size ? color.green : color.red, text_size = table_text_size)
+        current_row := current_row + 1
+        
+        table.cell(stats_table, 0, current_row, "Peak Account", text_color = color.white, text_size = table_text_size)
+        table.cell(stats_table, 1, current_row, "$" + str.tostring(peak_account_size, "#.##"), text_color = color.green, text_size = table_text_size)
+        current_row := current_row + 1
+        
+        table.cell(stats_table, 0, current_row, "Max Drawdown", text_color = color.white, text_size = table_text_size)
+        table.cell(stats_table, 1, current_row, str.tostring(math.abs(max_account_drawdown_pct), "#.##") + "%", text_color = color.red, text_size = table_text_size)
+        current_row := current_row + 1
+        
+        table.cell(stats_table, 0, current_row, "Total Return", text_color = color.white, text_size = table_text_size)
+        float total_return = ((current_account_size - initial_account_size) / initial_account_size) * 100
+        table.cell(stats_table, 1, current_row, str.tostring(total_return, "#.##") + "%", 
+                     text_color = total_return >= 0 ? color.green : color.red, text_size = table_text_size)
+        current_row := current_row + 1
+
+        table.cell(stats_table, 0, current_row, "Buy and Hold Return", text_color = color.white, text_size = table_text_size)
+        buy_and_hold_return = ((close - buy_and_hold_entry_price) / buy_and_hold_entry_price) * 100
+        table.cell(stats_table, 1, current_row, str.tostring(buy_and_hold_return, "#.##") + "%", 
+                         text_color = buy_and_hold_return >= 0 ? color.green : color.red, text_size = table_text_size)
+        current_row := current_row + 1
