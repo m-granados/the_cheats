@@ -1,6 +1,12 @@
+"""Simplified translation of the B‑Xtrender trading bot.
+
+This script mirrors the original Pine Script structure and includes placeholder logic. Replace these sections with real implementations to make the bot functional.
+"""
+
 import pandas as pd
 
 class BXtrenderBot:
+    """Container for strategy configuration and placeholder trading logic."""
     def __init__(self, data, initial_capital=30000):
         self.data = data
         self.initial_capital = initial_capital
@@ -31,9 +37,6 @@ class BXtrenderBot:
 data = pd.DataFrame()  # Replace with actual data
 bot = BXtrenderBot(data)
 bot.apply_strategy()
-
-
-This Python code sets up a class structure to mimic the Pine Script strategy configuration. The actual trading logic would need to be implemented in the `apply_strategy` method based on the settings.
 
 import pandas as pd
 
@@ -77,11 +80,14 @@ df = pd.DataFrame(data)
 
 # Example logic for applying filters and conditions
 def apply_trend_filter(row, enable_filter, daily_setting, weekly_setting, monthly_setting):
+    """Check if a row meets the configured trend filters."""
     if not enable_filter:
         return True
-    return (daily_setting == "All" or row['daily_trend'] == daily_setting) and \
-           (weekly_setting == "All" or row['weekly_trend'] == weekly_setting) and \
-           (monthly_setting == "All" or row['monthly_trend'] == monthly_setting)
+    return (
+        (daily_setting == "All" or row['daily_trend'] == daily_setting)
+        and (weekly_setting == "All" or row['weekly_trend'] == weekly_setting)
+        and (monthly_setting == "All" or row['monthly_trend'] == monthly_setting)
+    )
 
 df['trend_filter_1'] = df.apply(lambda row: apply_trend_filter(row, enable_trend_filter_1, daily_bxtrender_trend_settings_1, weekly_bxtrender_trend_settings_1, monthly_bxtrender_trend_settings_1), axis=1)
 
@@ -126,6 +132,7 @@ settings = {
 
 # Example usage of settings
 def apply_settings(df):
+    """Apply optional RSI and market-bias filters to a DataFrame."""
     # Example: Apply RSI filter if enabled
     if settings["enable_weekly_rsi_filter"]:
         df['RSI'] = df['Close'].rolling(window=settings["rsi_length"]).mean()  # Simplified RSI calculation
@@ -143,9 +150,6 @@ def apply_settings(df):
 # Assuming df is your DataFrame with market data
 # df = pd.read_csv('market_data.csv')
 # df = apply_settings(df)
-
-
-This Python code uses a dictionary to store settings similar to the Pine Script inputs. It includes a function `apply_settings` that applies some of these settings to a DataFrame, demonstrating how you might implement the logic in a pandas-based workflow.
 
 import pandas as pd
 
@@ -178,6 +182,7 @@ bx_stop_loss = 3.0
 
 # Timeframe checks
 def is_timeframe(period, target):
+    """Utility to compare pandas time offsets."""
     return pd.to_timedelta(period) == pd.to_timedelta(target)
 
 is_15m = is_timeframe('15T', '15T')
@@ -206,6 +211,7 @@ if use_tht_bot_settings:
 import pandas as pd
 
 def configure_strategy(strategy, timeframe, is_15m, use_bx_filters_with_tht_settings):
+    """Return a configuration dictionary for the chosen strategy."""
     config = {}
 
     # Trend filter settings
@@ -335,6 +341,7 @@ peak_account_size = initial_account_size
 max_account_drawdown_pct = 0.0
 
 def bxtrender(index, close, short_l1, short_l2, short_l3):
+    """Calculate the BXtrender indicator and trend classification."""
     shortTermXtrender = pd.Series(close).ewm(span=short_l1).mean() - pd.Series(close).ewm(span=short_l2).mean()
     shortTermXtrender = shortTermXtrender.rolling(window=short_l3).apply(lambda x: np.mean(x)) - 50
     bx_trend = np.where(shortTermXtrender > 0, 
@@ -343,6 +350,7 @@ def bxtrender(index, close, short_l1, short_l2, short_l3):
     return shortTermXtrender, shortTermXtrender.shift(1), bx_trend
 
 def rsi(index, close, rsi_length, rsi_ma_length):
+    """Compute RSI and its moving average."""
     delta = pd.Series(close).diff()
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
@@ -354,6 +362,7 @@ def rsi(index, close, rsi_length, rsi_ma_length):
     return rsi, rsi_ma
 
 def marketbias(index, open_, close, high, low, mb_len, mb_smoothing, mb_osc_len):
+    """Approximation of the market bias indicator."""
     o = pd.Series(open_).ewm(span=mb_len).mean()
     c = pd.Series(close).ewm(span=mb_len).mean()
     h = pd.Series(high).ewm(span=mb_len).mean()
@@ -389,10 +398,15 @@ enable_realtime_monthly_entries_condition = enable_realtime_entries and (realtim
 import pandas as pd
 
 def calculate_bxtrender(data, period):
-    # Placeholder for bxtrender calculation logic
-    return data['close'].rolling(window=period).mean(), data['close'].shift(1).rolling(window=period).mean(), None
+    """Simplified BXtrender calculation placeholder."""
+    return (
+        data['close'].rolling(window=period).mean(),
+        data['close'].shift(1).rolling(window=period).mean(),
+        None,
+    )
 
 def calculate_rsi(data, period):
+    """Simplified RSI calculation used in examples."""
     # Placeholder for RSI calculation logic
     delta = data['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
@@ -401,7 +415,19 @@ def calculate_rsi(data, period):
     rsi = 100 - (100 / (1 + rs))
     return rsi, rsi.rolling(window=period).mean()
 
-def process_data(df, is_daily, is_weekly, is_monthly, enable_realtime_weekly_entries_condition, enable_realtime_monthly_entries_condition, repaint_daily, repaint_weekly, repaint_monthly, strategy):
+def process_data(
+    df,
+    is_daily,
+    is_weekly,
+    is_monthly,
+    enable_realtime_weekly_entries_condition,
+    enable_realtime_monthly_entries_condition,
+    repaint_daily,
+    repaint_weekly,
+    repaint_monthly,
+    strategy,
+):
+    """Populate a DataFrame with indicator values for multiple timeframes."""
     hourly_bxtrender, hourly_bxtrender_prev, hourly_bxtrender_trend = calculate_bxtrender(df, 1)
 
     daily_bxtrender = None
@@ -483,6 +509,7 @@ import pandas as pd
 import numpy as np
 
 def calculate_rsi(data, period=14):
+    """Calculate a basic RSI series."""
     delta = data['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
@@ -491,15 +518,18 @@ def calculate_rsi(data, period=14):
     return rsi
 
 def calculate_market_bias(data, repaint=False):
+    """Mock market bias calculation used for demonstration."""
     # Placeholder for market bias calculation
     bias = np.random.random(len(data))  # Random values for illustration
     expansion = np.random.choice([True, False], len(data))
     return bias, expansion
 
 def calculate_sma(data, period):
+    """Return a simple moving average."""
     return data['close'].rolling(window=period).mean()
 
 def check_trend(trend_settings, bx, trend_value, include_no_data):
+    """Evaluate BXtrender trend filters."""
     if include_no_data and pd.isna(bx):
         return True
     if not pd.isna(bx):
@@ -553,14 +583,15 @@ data['trend_check'] = data.apply(lambda row: check_trend(trend_settings, row['cl
 import pandas as pd
 
 def check_trend(settings, bxtrender, bxtrender_trend, include_no_data):
-    # Placeholder for the actual trend checking logic
+    """Placeholder for Pine Script trend logic."""
     pass
 
 def check_mb(settings, bias, expansion):
-    # Placeholder for the actual mb checking logic
+    """Placeholder for market-bias checking logic."""
     pass
 
 def evaluate_conditions(df):
+    """Calculate filter conditions used for entries and exits."""
     df['mb_condition'] = (
         (df['mb_settings'] == "All") |
         ((df['mb_settings'] == "Green") & (df['mb_bias'] > 0)) |
@@ -651,6 +682,7 @@ import numpy as np
 
 # Entry conditions
 def calculate_entry_conditions(df):
+    """Determine entry signals for the active strategy."""
     bx_entry_condition = (
         (df['hourly_bxtrender_trend'] == 'higher_high') |
         ((df['entry_setting'] == "Higher Low") & (df['hourly_bxtrender_trend'] == 'higher_low')) |
@@ -677,6 +709,7 @@ def calculate_entry_conditions(df):
 
 # Exit conditions
 def calculate_exit_conditions(df):
+    """Determine exit signals for the active strategy."""
     bx_exit_higher_low = (
         (df['exit_setting'] == "Higher Low") &
         ((df['hourly_bxtrender_trend'] == 'higher_low') & (df['hourly_bxtrender_trend'].shift(1) == 'lower_low')) |
@@ -712,6 +745,7 @@ def calculate_exit_conditions(df):
 
 # Entry and exit conditions
 def calculate_entry_exit_conditions(df):
+    """Combine entry and exit checks with appropriate index shifts."""
     index = np.where((df['barstate_entry'] == "New Bar") & (df['strategy'] != "Weekly Watchlist"), 1, 0)
     entry_condition = (
         df['strategy_entry_condition'].shift(index) &
@@ -726,6 +760,7 @@ def calculate_entry_exit_conditions(df):
 
 # End of day trade check
 def eod_trade_check(df):
+    """Identify if trading near the close of day should trigger an entry."""
     eod_trade_check = False
     eod_trade_check_done = False
     
@@ -743,6 +778,7 @@ def eod_trade_check(df):
 
 # Bar confirmed
 def calculate_barconfirmed(df):
+    """Check if the current bar should be treated as confirmed."""
     barconfirmed = (
         (df['trade_before_close'] & (((df['hour'] != 15) | ~df['barstate_islastconfirmedhistory']) & df['barstate_isconfirmed']) |
         (df['barstate_isrealtime'] & (df['hour'] == 15) & df['eod_trade_check'])) |
@@ -753,15 +789,17 @@ def calculate_barconfirmed(df):
 
 # Entry timing
 def calculate_entry_timing(df):
+    """Determine if the current bar allows entering a trade."""
     entry_timing = (
-        (df['barstate_entry'] == "Bar Confirmed" & df['barconfirmed']) |
-        (df['barstate_entry'] == "New Bar" & (df['barstate_isnew'] | (df['strategy'] == "Weekly Watchlist")))
+        ((df['barstate_entry'] == "Bar Confirmed") & (df['barconfirmed'])) |
+        ((df['barstate_entry'] == "New Bar") & (df['barstate_isnew'] | (df['strategy'] == "Weekly Watchlist")))
     )
     
     return entry_timing
 
 # Get trade data
 def get_trade_data(df):
+    """Extract indicator values used when sending alerts."""
     trade_data = {
         "daily_bx": df['daily_bxtrender'].round(2),
         "daily_bx_previous": df['daily_bxtrender_prev'].round(2),
@@ -917,6 +955,7 @@ import numpy as np
 
 # Assuming df is your DataFrame with necessary columns
 def handle_trade_exit(df, strategy, entry_price, current_account_size, position_size, peak_account_size, max_account_drawdown_pct, trend_filters):
+    """Update statistics when an active trade closes."""
     for index, row in df.iterrows():
         if row['in_trade'] and row['exit_condition'] and row['bars_in_trade'] > 0:
             exit_price = row['open'] if row['barstate_entry'] == "New Bar" else row['close']
@@ -1043,6 +1082,7 @@ max_drawdown = min(max_drawdown, cumulative_profit_loss - peak_value)
 
 # Alert function (placeholder)
 def alert(message):
+    """Placeholder alert mechanism."""
     print(message)
 
 # Send alert
@@ -1115,6 +1155,7 @@ data['independent_bars_in_trade'] = data['independent_trade_tracking'].cumsum()
 
 # Update table on each bar
 def update_table(row):
+    """Generate a row of statistics for the display table."""
     warning_text = ""
     if row['strategy'] == "Hourly Swing/Quant Bot" and not row['hourly_swing_strategy_enabled']:
         warning_text = "Hourly Swing requires 1h timeframe and Quant Bot requires 15m timeframe"
@@ -1168,9 +1209,8 @@ def update_table(row):
         'trend_3_avg_win': trend_3_avg_win,
         'trend_3_avg_loss': trend_3_avg_loss,
         'trend_4_avg_win': trend_4_avg_win,
-        'trend_4_avg_loss': trend_4_avg
-
-import pandas as pd
+        'trend_4_avg_loss': trend_4_avg_loss,
+    }
 
 # Initialize current row
 current_row = 1
@@ -1180,6 +1220,7 @@ stats_table = pd.DataFrame(columns=["Column1", "Column2"])
 
 # Function to add a row to the DataFrame
 def add_row(df, col1, col2, current_row):
+    """Append a row to the stats table and return the next index."""
     df.loc[current_row] = [col1, col2]
     return current_row + 1
 
@@ -1311,12 +1352,13 @@ print(stats_table)
 
 import pandas as pd
 
-def update_table(stats_table, current_row, trend_filter_2_trades, trend_2_win_rate, trend_filter_2_profit, trend_2_avg_win, trend_2_avg_loss, trend_2_rr, 
-                 enable_trend_filter_3, daily_bxtrender_trend_settings_3, weekly_bxtrender_trend_settings_3, monthly_bxtrender_trend_settings_3, 
-                 show_bx_filter_stats, trend_filter_3_trades, trend_3_win_rate, trend_filter_3_profit, trend_3_avg_win, trend_3_avg_loss, trend_3_rr, 
-                 enable_trend_filter_4, daily_bxtrender_trend_settings_4, weekly_bxtrender_trend_settings_4, monthly_bxtrender_trend_settings_4, 
-                 trend_filter_4_trades, trend_4_win_rate, trend_filter_4_profit, trend_4_avg_win, trend_4_avg_loss, trend_4_rr, 
+def update_table(stats_table, current_row, trend_filter_2_trades, trend_2_win_rate, trend_filter_2_profit, trend_2_avg_win, trend_2_avg_loss, trend_2_rr,
+                 enable_trend_filter_3, daily_bxtrender_trend_settings_3, weekly_bxtrender_trend_settings_3, monthly_bxtrender_trend_settings_3,
+                 show_bx_filter_stats, trend_filter_3_trades, trend_3_win_rate, trend_filter_3_profit, trend_3_avg_win, trend_3_avg_loss, trend_3_rr,
+                 enable_trend_filter_4, daily_bxtrender_trend_settings_4, weekly_bxtrender_trend_settings_4, monthly_bxtrender_trend_settings_4,
+                 trend_filter_4_trades, trend_4_win_rate, trend_filter_4_profit, trend_4_avg_win, trend_4_avg_loss, trend_4_rr,
                  enable_weekly_rsi_filter, enable_monthly_rsi_filter, table_text_size):
+    """Populate the statistics table with trend filter rows and settings."""
 
     def add_row(stats_table, current_row, col0, col1, text_color, text_size):
         stats_table.loc[current_row] = [col0, col1, text_color, text_size]
@@ -1388,11 +1430,13 @@ stats_table = pd.DataFrame(columns=['Description', 'Value'])
 
 # Function to add a row to the table
 def add_row(description, value, text_color, text_size):
+    """Helper used by the stats output examples."""
     global stats_table
     stats_table = stats_table.append({'Description': description, 'Value': value}, ignore_index=True)
 
 # Function to merge cells (not applicable in pandas, but we can simulate by adding a header)
 def merge_cells(description, bgcolor, text_size):
+    """Add a header row to the stats table."""
     global stats_table
     stats_table = stats_table.append({'Description': description, 'Value': ''}, ignore_index=True)
 
@@ -1456,6 +1500,7 @@ print(stats_table)
 import pandas as pd
 
 def create_stats_table(data):
+    """Return a small DataFrame summarizing account performance."""
     rows = []
     
     # Cumulative P/L
