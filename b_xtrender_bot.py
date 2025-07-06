@@ -788,6 +788,7 @@ def calculate_barconfirmed(df):
     return barconfirmed
 
 # Entry timing
+
 def calculate_entry_timing(df):
     """Determine if the current bar allows entering a trade."""
     entry_timing = (
