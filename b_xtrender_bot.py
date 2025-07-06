@@ -32,9 +32,6 @@ data = pd.DataFrame()  # Replace with actual data
 bot = BXtrenderBot(data)
 bot.apply_strategy()
 
-
-This Python code sets up a class structure to mimic the Pine Script strategy configuration. The actual trading logic would need to be implemented in the `apply_strategy` method based on the settings.
-
 import pandas as pd
 
 # Define input parameters
@@ -143,9 +140,6 @@ def apply_settings(df):
 # Assuming df is your DataFrame with market data
 # df = pd.read_csv('market_data.csv')
 # df = apply_settings(df)
-
-
-This Python code uses a dictionary to store settings similar to the Pine Script inputs. It includes a function `apply_settings` that applies some of these settings to a DataFrame, demonstrating how you might implement the logic in a pandas-based workflow.
 
 import pandas as pd
 
@@ -754,8 +748,8 @@ def calculate_barconfirmed(df):
 # Entry timing
 def calculate_entry_timing(df):
     entry_timing = (
-        (df['barstate_entry'] == "Bar Confirmed" & df['barconfirmed']) |
-        (df['barstate_entry'] == "New Bar" & (df['barstate_isnew'] | (df['strategy'] == "Weekly Watchlist")))
+        ((df['barstate_entry'] == "Bar Confirmed") & (df['barconfirmed'])) |
+        ((df['barstate_entry'] == "New Bar") & (df['barstate_isnew'] | (df['strategy'] == "Weekly Watchlist")))
     )
     
     return entry_timing
@@ -1168,9 +1162,8 @@ def update_table(row):
         'trend_3_avg_win': trend_3_avg_win,
         'trend_3_avg_loss': trend_3_avg_loss,
         'trend_4_avg_win': trend_4_avg_win,
-        'trend_4_avg_loss': trend_4_avg
-
-import pandas as pd
+        'trend_4_avg_loss': trend_4_avg_loss,
+    }
 
 # Initialize current row
 current_row = 1
